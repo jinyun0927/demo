@@ -5,7 +5,7 @@ import { Question, AIReasoning, UserAttempt, SessionAnalysis } from "../types";
 const SYSTEM_INSTRUCTION_BASE = `
 You are an AI reasoning assistant for civic exams. 
 Focus on decoding logic, identifying conceptual traps, and explaining institutional reasoning.
-Output ONLY valid JSON matching the provided schema. Do not include markdown code blocks or any text outside the JSON.
+Output ONLY valid JSON matching the provided schema.
 `;
 
 const checkApiKey = () => {
@@ -31,12 +31,13 @@ export const analyzeQuestion = async (
     Correct Answer: ${correctOption?.text} (ID: ${question.correctOptionId})
     
     Provide a JSON object with:
-    1. explanation: Institutional reasoning for the correct answer.
-    2. conceptualTrap: The specific distractor logic used.
-    3. testedPrinciple: The core legal or civic principle.
-    4. learnerPerspective: Why a student might choose the wrong answer (confusing personal intuition vs obligation).
-    5. misleadingLanguage: Any subtle wording nuances or specific linguistic traps.
-    6. patternAnalysis: Why this specific category of question is often misunderstood by learners.
+    1. explanation: Professional institutional reasoning in English.
+    2. simplifiedExplanation: The same reasoning in very simple "Plain English" (B1 level).
+    3. vocabulary: A list of 2-3 difficult terms from the question with simple definitions in English.
+    4. conceptualTrap: The specific distractor logic used.
+    5. testedPrinciple: The core legal or civic principle.
+    6. misleadingLanguage: Specific linguistic traps.
+    7. patternAnalysis: Common misunderstanding patterns for this category.
   `;
 
   try {
@@ -50,13 +51,25 @@ export const analyzeQuestion = async (
           type: Type.OBJECT,
           properties: {
             explanation: { type: Type.STRING },
+            simplifiedExplanation: { type: Type.STRING },
+            vocabulary: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  term: { type: Type.STRING },
+                  simpleDefinition: { type: Type.STRING }
+                },
+                required: ["term", "simpleDefinition"]
+              }
+            },
             conceptualTrap: { type: Type.STRING },
             testedPrinciple: { type: Type.STRING },
             learnerPerspective: { type: Type.STRING },
             misleadingLanguage: { type: Type.STRING },
             patternAnalysis: { type: Type.STRING }
           },
-          required: ["explanation", "conceptualTrap", "testedPrinciple"]
+          required: ["explanation", "simplifiedExplanation", "vocabulary", "conceptualTrap", "testedPrinciple"]
         }
       }
     });
@@ -76,6 +89,7 @@ export const analyzeSession = async (
 ): Promise<SessionAnalysis> => {
   checkApiKey();
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const isPerfect = attempts.every(a => a.isCorrect);
   
   const historyData = attempts.map(a => {
     const q = questions.find(qu => qu.id === a.questionId);
@@ -89,31 +103,64 @@ export const analyzeSession = async (
     };
   });
 
-  const prompt = `
-    Conduct a "Civic Logic Audit" for this learner based on their performance:
-    Session History: ${JSON.stringify(historyData)}
+  if (isPerfect) {
+    const masteryPrompt = `
+      The learner has answered all previous questions correctly.
+      Your role is NOT to praise, but to validate reasoning depth and check for hidden misconceptions.
+      
+      Session History: ${JSON.stringify(historyData)}
 
-    Your task is to decode their reasoning gaps across these scenarios and generate a targeted practice question.
+      Tasks:
+      1. Reasoning validation: Explain what correct answers suggest about their institutional logic.
+      2. Trap awareness: Identify common traps they avoided.
+      3. Subtle boundary check: Introduce ONE subtle scenario testing the same concepts.
+      4. Pedagogical framing: Explain why this check matters beyond a "full score".
+
+      Output format (JSON only):
+      {
+        "overall_validation": "string",
+        "avoided_traps": ["string", "string"],
+        "why_full_score_is_not_the_end": "string",
+        "advanced_check": {
+          "scenario": "string",
+          "question": "string",
+          "options": [{ "id": "A", "text": "string" }, { "id": "B", "text": "string" }, { "id": "C", "text": "string" }],
+          "correct": "string",
+          "explanation": "string"
+        }
+      }
+    `;
+
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: masteryPrompt,
+        config: {
+          systemInstruction: "You are an AI reasoning assistant. Focus on institutional depth and nuance validation. Output valid JSON.",
+          responseMimeType: "application/json"
+        }
+      });
+      return { isPerfect: true, mastery: JSON.parse(response.text.trim()) };
+    } catch (e) {
+      console.error("Mastery analysis error", e);
+      throw e;
+    }
+  }
+
+  const prompt = `
+    Conduct a "Civic Logic Audit" for this learner:
+    Session History: ${JSON.stringify(historyData)}
     
     Required JSON Schema:
     {
-      "overallAssessment": "String summary of their institutional logic patterns",
+      "overallAssessment": "String summary of logic patterns",
       "weakAreas": [
-        { "area": "Category Name", "evidenceQuestionIds": [1], "description": "Specific reasoning gap found" }
+        { "area": "Category", "evidenceQuestionIds": [1], "description": "Specific gap" }
       ],
-      "errorPatterns": "Specific description of recurring logical errors (e.g. intuitive vs procedural)",
-      "recommendedFocus": "Actionable advice for the next stage of study",
+      "errorPatterns": "Description of errors",
+      "recommendedFocus": "Actionable advice",
       "nextPractice": {
-        "id": 999,
-        "category": "Targeted Topic",
-        "text": "The new question text",
-        "options": [
-          {"id": "a", "text": "Choice 1"},
-          {"id": "b", "text": "Choice 2"},
-          {"id": "c", "text": "Choice 3"},
-          {"id": "d", "text": "Choice 4"}
-        ],
-        "correctOptionId": "a"
+        "id": 999, "category": "Topic", "text": "Question", "options": [{"id": "a", "text": "Choice"}], "correctOptionId": "a"
       }
     }
   `;
@@ -125,54 +172,11 @@ export const analyzeSession = async (
       config: {
         systemInstruction: SYSTEM_INSTRUCTION_BASE,
         responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            overallAssessment: { type: Type.STRING },
-            weakAreas: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  area: { type: Type.STRING },
-                  evidenceQuestionIds: { type: Type.ARRAY, items: { type: Type.NUMBER } },
-                  description: { type: Type.STRING }
-                },
-                required: ["area", "evidenceQuestionIds", "description"]
-              }
-            },
-            errorPatterns: { type: Type.STRING },
-            recommendedFocus: { type: Type.STRING },
-            nextPractice: {
-              type: Type.OBJECT,
-              properties: {
-                id: { type: Type.NUMBER },
-                category: { type: Type.STRING },
-                text: { type: Type.STRING },
-                options: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      id: { type: Type.STRING },
-                      text: { type: Type.STRING }
-                    },
-                    required: ["id", "text"]
-                  }
-                },
-                correctOptionId: { type: Type.STRING }
-              },
-              required: ["id", "category", "text", "options", "correctOptionId"]
-            }
-          },
-          required: ["overallAssessment", "weakAreas", "errorPatterns", "recommendedFocus", "nextPractice"]
-        }
       }
     });
 
-    const text = response.text;
-    if (!text) throw new Error("No analysis generated by the AI.");
-    return JSON.parse(text.trim());
+    const data = JSON.parse(response.text.trim());
+    return { ...data, isPerfect: false };
   } catch (error) {
     console.error("Gemini analyzeSession error:", error);
     throw error;

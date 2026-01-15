@@ -20,13 +20,19 @@ export interface UserAttempt {
   timestamp: number;
 }
 
+export interface VocabularyTerm {
+  term: string;
+  simpleDefinition: string;
+}
+
 export interface AIReasoning {
   explanation: string;
+  simplifiedExplanation?: string;
+  vocabulary?: VocabularyTerm[];
   conceptualTrap: string;
   testedPrinciple: string;
   learnerPerspective?: string;
   misleadingLanguage?: string;
-  // Added patternAnalysis to fix "Property 'patternAnalysis' does not exist on type 'AIReasoning'" error
   patternAnalysis?: string;
 }
 
@@ -36,12 +42,27 @@ export interface WeakArea {
   description: string;
 }
 
+export interface MasteryValidation {
+  overall_validation: string;
+  avoided_traps: string[];
+  why_full_score_is_not_the_end: string;
+  advanced_check: {
+    scenario: string;
+    question: string;
+    options: Option[];
+    correct: string;
+    explanation: string;
+  };
+}
+
 export interface SessionAnalysis {
-  overallAssessment: string;
-  weakAreas: WeakArea[];
-  errorPatterns: string;
-  recommendedFocus: string;
-  nextPractice: Question;
+  overallAssessment?: string;
+  weakAreas?: WeakArea[];
+  errorPatterns?: string;
+  recommendedFocus?: string;
+  nextPractice?: Question;
+  mastery?: MasteryValidation; // New field for perfect scores
+  isPerfect: boolean;
 }
 
 export enum ViewMode {
