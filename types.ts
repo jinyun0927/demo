@@ -13,7 +13,7 @@ export interface Question {
   options: Option[];
   correctOptionId: string;
   context?: string;
-  imageUrl?: string; // Pre-stored or generated image URL
+  imageUrl?: string;
 }
 
 export interface UserAttempt {
@@ -34,10 +34,8 @@ export interface AIReasoning {
   vocabulary?: VocabularyTerm[];
   conceptualTrap: string;
   testedPrinciple: string;
-  learnerPerspective?: string;
+  thinkingSteps: string[];
   misleadingLanguage?: string;
-  patternAnalysis?: string;
-  visualAid?: string; // Generated image specifically for reasoning
 }
 
 export interface WeakArea {
@@ -58,6 +56,8 @@ export interface MasteryValidation {
   };
 }
 
+export type SessionTier = 'CRITICAL' | 'ALIGNED' | 'MASTERY';
+
 export interface SessionAnalysis {
   overallAssessment?: string;
   weakAreas?: WeakArea[];
@@ -65,7 +65,8 @@ export interface SessionAnalysis {
   recommendedFocus?: string;
   mastery?: MasteryValidation;
   isPerfect: boolean;
-  targetedQuestions?: Question[];
+  scorePercentage: number;
+  tier: SessionTier;
 }
 
 export enum ViewMode {
@@ -73,3 +74,5 @@ export enum ViewMode {
   ANALYSIS = 'ANALYSIS',
   RETEST = 'RETEST'
 }
+
+export type SessionType = 'BASELINE' | 'TARGETED';

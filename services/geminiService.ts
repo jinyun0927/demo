@@ -1,313 +1,268 @@
 
 import { GoogleGenAI, Type, Modality } from "@google/genai";
-import { Question, AIReasoning, UserAttempt, SessionAnalysis } from "../types";
+import { Question, AIReasoning, UserAttempt, SessionAnalysis, SessionTier } from "../types";
+
+// Engine state tracking
+let useMockMode = true; 
+let isQuotaExhausted = false;
+
+// Tiered Model Constants
+const MODEL_FLASH = 'gemini-3-flash-preview';
+const MODEL_PRO = 'gemini-3-pro-preview'; 
+const MODEL_LIVE = 'gemini-2.5-flash-native-audio-preview-12-2025';
+const MODEL_TTS = 'gemini-2.5-flash-preview-tts';
+
+export const getEngineStatus = () => ({
+  useMockMode,
+  isQuotaExhausted
+});
+
+export const setMockMode = (val: boolean) => {
+  useMockMode = val;
+};
 
 const SYSTEM_INSTRUCTION_BASE = `
 You are the "CivicMind Institutional Auditor," an elite AI specialized in French law and civic exams. 
-Your goal is to act as a cultural and legal bridge. 
-MISSION: Decode the French institutional logic and explain it in clear, professional English.
-
-When performing a Session Audit:
-1. If the user has errors, identify the "Systemic Reasoning Gap" (e.g., confusing secularism with anti-religion).
-2. If the user is perfect, trigger "Mastery Validation" with a high-level nuance challenge.
-3. ALWAYS output valid JSON matching the requested schema.
+MISSION: Decode French institutional logic and explain it in clear, professional English.
+CRITICAL: Respond ONLY with a raw JSON object matching the requested schema.
 `;
-
-const CACHE_PREFIX = "CIVICMIND_IMG_CACHE_";
 
 const checkApiKey = () => {
   if (!process.env.API_KEY) {
-    throw new Error("API Key is missing. The application requires process.env.API_KEY to function.");
+    throw new Error("API Key is missing.");
   }
 };
 
-// Simple hash function for string keys
-const getCacheKey = (text: string) => {
-  let hash = 0;
-  for (let i = 0; i < text.length; i++) {
-    const char = text.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const handleApiError = (err: any) => {
+  console.error("API Engine Error:", err);
+  if (err?.message?.includes("429") || err?.message?.includes("quota") || err?.message?.includes("Resource has been exhausted")) {
+    isQuotaExhausted = true;
+    return "QUOTA_EXHAUSTED";
   }
-  return `${CACHE_PREFIX}${hash}`;
+  return "GENERAL_ERROR";
 };
 
-// Generate a scenario image using gemini-2.5-flash-image with persistence
-export const generateScenarioImage = async (prompt: string): Promise<string | null> => {
-  const cacheKey = getCacheKey(prompt);
-  
-  // Check Local Persistence first
-  const cached = localStorage.getItem(cacheKey);
-  if (cached) {
-    console.log("Image loaded from local project cache.");
-    return cached;
+export const encode = (bytes: Uint8Array) => {
+  let binary = '';
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
+    binary += String.fromCharCode(bytes[i]);
   }
+  return btoa(binary);
+};
 
-  checkApiKey();
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image',
-      contents: {
-        parts: [{ text: `A clean, cinematic illustration of this French civic scenario: ${prompt}. Style: Professional flat illustration, corporate colors.` }]
-      },
-      config: { imageConfig: { aspectRatio: "16:9" } }
-    });
-    
-    for (const part of response.candidates[0].content.parts) {
-      if (part.inlineData) {
-        const base64Data = `data:image/png;base64,${part.inlineData.data}`;
-        
-        // Persist for next time
-        try {
-          localStorage.setItem(cacheKey, base64Data);
-        } catch (e) {
-          // LocalStorage might be full
-          console.warn("Storage full, could not cache image.");
-        }
-        
-        return base64Data;
-      }
+export const decode = (base64: string) => {
+  const binaryString = atob(base64);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+};
+
+export const decodeAudioData = async (
+  data: Uint8Array,
+  ctx: AudioContext,
+  sampleRate: number,
+  numChannels: number = 1
+): Promise<AudioBuffer> => {
+  const dataInt16 = new Int16Array(data.buffer);
+  const frameCount = dataInt16.length / numChannels;
+  const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
+
+  for (let channel = 0; channel < numChannels; channel++) {
+    const channelData = buffer.getChannelData(channel);
+    for (let i = 0; i < frameCount; i++) {
+      channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
     }
-    return null;
-  } catch (e) {
-    console.error("Gemini Image Generation Error:", e);
-    return null;
   }
+  return buffer;
 };
 
-// Generate speech for reasoning using gemini-2.5-flash-preview-tts
-export const speakReasoning = async (text: string): Promise<Uint8Array | null> => {
-  checkApiKey();
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text: `Explain clearly: ${text}` }] }],
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: { 
-          voiceConfig: { 
-            prebuiltVoiceConfig: { voiceName: 'Kore' } 
-          } 
-        },
-      },
-    });
-    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (base64Audio) {
-      const binaryString = atob(base64Audio);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      return bytes;
-    }
-    return null;
-  } catch (e) {
-    return null;
-  }
-};
-
-// Generate targeted challenge questions using gemini-3-pro-preview
-export const generateTargetedQuestions = async (analysis: SessionAnalysis): Promise<Question[]> => {
-  checkApiKey();
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  
-  const prompt = `
-    Based on this logic audit:
-    Weak Areas: ${JSON.stringify(analysis.weakAreas)}
-    Error Patterns: ${analysis.errorPatterns}
-    
-    Generate 3 NEW and unique French civic exam questions (scenarios) to test these specific gaps.
-    Each question MUST include:
-    - id (unique number)
-    - category (French)
-    - text (French scenario)
-    - text_en (English translation)
-    - options (4 options with id a,b,c,d, and both text and text_en fields)
-    - correctOptionId
-    - context (legal citation in French)
-
-    Output as a JSON array of Questions.
-  `;
-
-  const response = await ai.models.generateContent({
-    model: "gemini-3-pro-preview",
-    contents: prompt,
-    config: {
-      systemInstruction: "You are a specialized civic exam generator. Output ONLY a valid JSON array.",
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: {
-          type: Type.OBJECT,
-          properties: {
-            id: { type: Type.NUMBER },
-            category: { type: Type.STRING },
-            text: { type: Type.STRING },
-            text_en: { type: Type.STRING },
-            options: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  id: { type: Type.STRING },
-                  text: { type: Type.STRING },
-                  text_en: { type: Type.STRING }
-                },
-                required: ["id", "text"]
-              }
-            },
-            correctOptionId: { type: Type.STRING },
-            context: { type: Type.STRING }
-          },
-          required: ["id", "category", "text", "options", "correctOptionId"]
-        }
-      }
-    }
-  });
-
-  return JSON.parse(response.text.trim());
-};
-
-// Analyze a specific question attempt using gemini-3-pro-preview
 export const analyzeQuestion = async (
   question: Question,
   selectedOptionId: string
-): Promise<AIReasoning> => {
-  checkApiKey();
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const selectedOption = question.options.find(o => o.id === selectedOptionId);
-  const correctOption = question.options.find(o => o.id === question.correctOptionId);
-
-  const prompt = `
-    AUDIT REQUEST:
-    Scenario: ${question.text}
-    User Choice: ${selectedOption?.text}
-    Correct Answer: ${correctOption?.text}
-    
-    Output JSON with: explanation, simplifiedExplanation, vocabulary(array), conceptualTrap, testedPrinciple, misleadingLanguage.
-  `;
-
-  const response = await ai.models.generateContent({
-    model: "gemini-3-pro-preview",
-    contents: prompt,
-    config: {
-      systemInstruction: SYSTEM_INSTRUCTION_BASE,
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          explanation: { type: Type.STRING },
-          simplifiedExplanation: { type: Type.STRING },
-          vocabulary: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                term: { type: Type.STRING },
-                simpleDefinition: { type: Type.STRING }
-              },
-              required: ["term", "simpleDefinition"]
-            }
-          },
-          conceptualTrap: { type: Type.STRING },
-          testedPrinciple: { type: Type.STRING },
-          misleadingLanguage: { type: Type.STRING }
-        },
-        required: ["explanation", "conceptualTrap", "testedPrinciple"]
+): Promise<{ reasoning: AIReasoning; sources?: any[]; isMock?: boolean }> => {
+  if (useMockMode) {
+    await sleep(1500);
+    return {
+      isMock: true,
+      reasoning: {
+        explanation: "Institutional logic requires distinguishing between service users (citizens) and service providers (agents).",
+        thinkingSteps: ["Identify Actor", "Apply 1905 Neutrality Law"],
+        conceptualTrap: "Confusion between student rules and agent duties.",
+        testedPrinciple: "Public Service Neutrality"
       }
-    }
-  });
+    };
+  }
 
-  return JSON.parse(response.text.trim());
+  try {
+    checkApiKey();
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const response = await ai.models.generateContent({
+      model: MODEL_FLASH,
+      contents: `Deep Audit Question: ${question.text}, User Choice: ${selectedOptionId}.`,
+      config: {
+        systemInstruction: SYSTEM_INSTRUCTION_BASE,
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            explanation: { type: Type.STRING },
+            thinkingSteps: { type: Type.ARRAY, items: { type: Type.STRING } },
+            conceptualTrap: { type: Type.STRING },
+            testedPrinciple: { type: Type.STRING }
+          }
+        }
+      }
+    });
+    return { reasoning: JSON.parse(response.text), sources: response.candidates?.[0]?.groundingMetadata?.groundingChunks };
+  } catch (err) {
+    if (handleApiError(err) === "QUOTA_EXHAUSTED") {
+        useMockMode = true; 
+    }
+    return analyzeQuestion(question, selectedOptionId);
+  }
 };
 
-// Perform session-wide audit using gemini-3-pro-preview
-export const analyzeSession = async (
-  questions: Question[],
-  attempts: UserAttempt[]
-): Promise<SessionAnalysis> => {
-  checkApiKey();
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const isPerfect = attempts.every(a => a.isCorrect);
+export const analyzeSession = async (questions: Question[], attempts: UserAttempt[]): Promise<SessionAnalysis> => {
+  const correctCount = attempts.filter(a => a.isCorrect).length;
+  const scorePercentage = (correctCount / attempts.length) * 100;
   
-  const auditContext = attempts.map(a => {
-    const q = questions.find(qu => qu.id === a.questionId);
-    const selected = q?.options.find(o => o.id === a.selectedOptionId);
-    return { 
-      question: q?.text, 
-      category: q?.category, 
-      userChoice: selected?.text, 
-      wasCorrect: a.isCorrect 
-    };
-  });
+  let tier: SessionTier = 'ALIGNED';
+  if (scorePercentage === 100) tier = 'MASTERY';
+  else if (scorePercentage === 0) tier = 'CRITICAL';
 
-  const prompt = `
-    PERFORM INSTITUTIONAL LOGIC AUDIT.
-    Session History: ${JSON.stringify(auditContext)}
-    The user is ${isPerfect ? 'PERFECT' : 'DEVELOPING'}. 
-    Based on this, generate a comprehensive session analysis.
-  `;
+  if (useMockMode) {
+    await sleep(1500);
+    return {
+      isPerfect: scorePercentage === 100,
+      scorePercentage,
+      tier,
+      overallAssessment: "Simulation: Alignment confirmed.",
+      errorPatterns: "Standard baseline.",
+      mastery: tier === 'MASTERY' ? {
+        why_full_score_is_not_the_end: "Mastery involves advanced jurisprudence.",
+        advanced_check: {
+          scenario: "Public library exhibit.",
+          question: "Can religious texts be shown historically?",
+          options: [{ id: "a", text: "Yes" }, { id: "b", text: "No" }],
+          correct: "a",
+          explanation: "Historical context is allowed."
+        }
+      } : undefined
+    } as any;
+  }
 
-  const response = await ai.models.generateContent({
-    model: "gemini-3-pro-preview",
-    contents: prompt,
-    config: {
-      systemInstruction: SYSTEM_INSTRUCTION_BASE,
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          overallAssessment: { type: Type.STRING, description: "Executive summary of reasoning quality." },
-          weakAreas: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                area: { type: Type.STRING },
-                description: { type: Type.STRING }
-              },
-              required: ["area", "description"]
-            }
-          },
-          errorPatterns: { type: Type.STRING, description: "Identification of repeated logic errors." },
-          recommendedFocus: { type: Type.STRING, description: "Actionable fix for the user." },
-          mastery: {
+  try {
+    checkApiKey();
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const response = await ai.models.generateContent({
+      model: MODEL_PRO,
+      contents: `Analyze exam session history: ${JSON.stringify(attempts)}. Generate institutional audit report.`,
+      config: {
+        systemInstruction: "You are an elite legal auditor. Analyze errors and provide deep patterns.",
+        responseMimeType: "application/json"
+      }
+    });
+    const data = JSON.parse(response.text);
+    return { ...data, isPerfect: scorePercentage === 100, scorePercentage, tier };
+  } catch (err) {
+    handleApiError(err);
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const response = await ai.models.generateContent({
+      model: MODEL_FLASH,
+      contents: `Analyze attempts: ${JSON.stringify(attempts)}. JSON output.`,
+      config: { responseMimeType: "application/json" }
+    });
+    const data = JSON.parse(response.text);
+    return { ...data, isPerfect: scorePercentage === 100, scorePercentage, tier };
+  }
+};
+
+export const speakReasoning = async (text: string): Promise<Uint8Array | null> => {
+  if (useMockMode) return null;
+  try {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const response = await ai.models.generateContent({
+      model: MODEL_TTS,
+      contents: [{ parts: [{ text: text }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } } },
+      },
+    });
+    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    return base64Audio ? decode(base64Audio) : null;
+  } catch (err) {
+    handleApiError(err);
+    return null;
+  }
+};
+
+export const generateTargetedQuestions = async (analysis: SessionAnalysis): Promise<Question[]> => {
+  const FALLBACK_QUESTION: Question = {
+    id: 999,
+    category: "Remediation",
+    text: "Un agent d'un hôpital public peut-il porter un signe religieux visible dans l'exercice de ses fonctions ?",
+    text_en: "Can a public hospital employee wear a visible religious symbol while performing their duties?",
+    options: [
+      { id: "a", text: "Non, la neutralité est absolue pour tous les agents publics.", text_en: "No, neutrality is absolute for all public employees." },
+      { id: "b", text: "Oui, si le patient ne s'y oppose pas.", text_en: "Yes, if the patient does not object." }
+    ],
+    correctOptionId: "a"
+  };
+
+  if (useMockMode) {
+    await sleep(1000);
+    return [FALLBACK_QUESTION];
+  }
+
+  try {
+    checkApiKey();
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const response = await ai.models.generateContent({
+      model: MODEL_FLASH,
+      contents: `Generate 1 repair question (French Law). 
+      IMPORTANT: The 'text' and 'options.text' MUST be in French. 
+      The 'text_en' and 'options.text_en' MUST be in English.`,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
             type: Type.OBJECT,
             properties: {
-              overall_validation: { type: Type.STRING },
-              avoided_traps: { type: Type.ARRAY, items: { type: Type.STRING } },
-              why_full_score_is_not_the_end: { type: Type.STRING },
-              advanced_check: {
-                type: Type.OBJECT,
-                properties: {
-                  scenario: { type: Type.STRING },
-                  question: { type: Type.STRING },
-                  options: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        id: { type: Type.STRING },
-                        text: { type: Type.STRING }
-                      },
-                      required: ["id", "text"]
-                    }
+              id: { type: Type.INTEGER },
+              category: { type: Type.STRING },
+              text: { type: Type.STRING, description: "French version" },
+              text_en: { type: Type.STRING, description: "English version" },
+              options: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    text: { type: Type.STRING, description: "French" },
+                    text_en: { type: Type.STRING, description: "English" }
                   },
-                  correct: { type: Type.STRING },
-                  explanation: { type: Type.STRING }
-                },
-                required: ["scenario", "question", "options", "correct", "explanation"]
-              }
-            }
+                  required: ["id", "text", "text_en"]
+                }
+              },
+              correctOptionId: { type: Type.STRING }
+            },
+            required: ["id", "category", "text", "text_en", "options", "correctOptionId"]
           }
-        },
-        required: ["overallAssessment"]
+        }
       }
-    }
-  });
-
-  const result = JSON.parse(response.text.trim());
-  return { ...result, isPerfect };
+    });
+    
+    const parsed = JSON.parse(response.text);
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : [FALLBACK_QUESTION];
+  } catch (err) {
+    handleApiError(err);
+    return [FALLBACK_QUESTION];
+  }
 };
