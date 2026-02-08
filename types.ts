@@ -2,15 +2,18 @@
 export interface Option {
   id: string;
   text: string;
+  text_en?: string;
 }
 
 export interface Question {
   id: number;
   category: string;
   text: string;
+  text_en?: string;
   options: Option[];
   correctOptionId: string;
   context?: string;
+  imageUrl?: string; // Pre-stored or generated image URL
 }
 
 export interface UserAttempt {
@@ -34,11 +37,11 @@ export interface AIReasoning {
   learnerPerspective?: string;
   misleadingLanguage?: string;
   patternAnalysis?: string;
+  visualAid?: string; // Generated image specifically for reasoning
 }
 
 export interface WeakArea {
   area: string;
-  evidenceQuestionIds: number[];
   description: string;
 }
 
@@ -60,12 +63,13 @@ export interface SessionAnalysis {
   weakAreas?: WeakArea[];
   errorPatterns?: string;
   recommendedFocus?: string;
-  nextPractice?: Question;
-  mastery?: MasteryValidation; // New field for perfect scores
+  mastery?: MasteryValidation;
   isPerfect: boolean;
+  targetedQuestions?: Question[];
 }
 
 export enum ViewMode {
   LEARN = 'LEARN',
   ANALYSIS = 'ANALYSIS',
+  RETEST = 'RETEST'
 }

@@ -1,12 +1,19 @@
 
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { Question, AIReasoning, UserAttempt, SessionAnalysis } from "../types";
 
 const SYSTEM_INSTRUCTION_BASE = `
-You are an AI reasoning assistant for civic exams. 
-Focus on decoding logic, identifying conceptual traps, and explaining institutional reasoning.
-Output ONLY valid JSON matching the provided schema.
+You are the "CivicMind Institutional Auditor," an elite AI specialized in French law and civic exams. 
+Your goal is to act as a cultural and legal bridge. 
+MISSION: Decode the French institutional logic and explain it in clear, professional English.
+
+When performing a Session Audit:
+1. If the user has errors, identify the "Systemic Reasoning Gap" (e.g., confusing secularism with anti-religion).
+2. If the user is perfect, trigger "Mastery Validation" with a high-level nuance challenge.
+3. ALWAYS output valid JSON matching the requested schema.
 `;
+
+const CACHE_PREFIX = "CIVICMIND_IMG_CACHE_";
 
 const checkApiKey = () => {
   if (!process.env.API_KEY) {
@@ -14,6 +21,156 @@ const checkApiKey = () => {
   }
 };
 
+// Simple hash function for string keys
+const getCacheKey = (text: string) => {
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    const char = text.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32bit integer
+  }
+  return `${CACHE_PREFIX}${hash}`;
+};
+
+// Generate a scenario image using gemini-2.5-flash-image with persistence
+export const generateScenarioImage = async (prompt: string): Promise<string | null> => {
+  const cacheKey = getCacheKey(prompt);
+  
+  // Check Local Persistence first
+  const cached = localStorage.getItem(cacheKey);
+  if (cached) {
+    console.log("Image loaded from local project cache.");
+    return cached;
+  }
+
+  checkApiKey();
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: {
+        parts: [{ text: `A clean, cinematic illustration of this French civic scenario: ${prompt}. Style: Professional flat illustration, corporate colors.` }]
+      },
+      config: { imageConfig: { aspectRatio: "16:9" } }
+    });
+    
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData) {
+        const base64Data = `data:image/png;base64,${part.inlineData.data}`;
+        
+        // Persist for next time
+        try {
+          localStorage.setItem(cacheKey, base64Data);
+        } catch (e) {
+          // LocalStorage might be full
+          console.warn("Storage full, could not cache image.");
+        }
+        
+        return base64Data;
+      }
+    }
+    return null;
+  } catch (e) {
+    console.error("Gemini Image Generation Error:", e);
+    return null;
+  }
+};
+
+// Generate speech for reasoning using gemini-2.5-flash-preview-tts
+export const speakReasoning = async (text: string): Promise<Uint8Array | null> => {
+  checkApiKey();
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash-preview-tts",
+      contents: [{ parts: [{ text: `Explain clearly: ${text}` }] }],
+      config: {
+        responseModalities: [Modality.AUDIO],
+        speechConfig: { 
+          voiceConfig: { 
+            prebuiltVoiceConfig: { voiceName: 'Kore' } 
+          } 
+        },
+      },
+    });
+    const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+    if (base64Audio) {
+      const binaryString = atob(base64Audio);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      return bytes;
+    }
+    return null;
+  } catch (e) {
+    return null;
+  }
+};
+
+// Generate targeted challenge questions using gemini-3-pro-preview
+export const generateTargetedQuestions = async (analysis: SessionAnalysis): Promise<Question[]> => {
+  checkApiKey();
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  
+  const prompt = `
+    Based on this logic audit:
+    Weak Areas: ${JSON.stringify(analysis.weakAreas)}
+    Error Patterns: ${analysis.errorPatterns}
+    
+    Generate 3 NEW and unique French civic exam questions (scenarios) to test these specific gaps.
+    Each question MUST include:
+    - id (unique number)
+    - category (French)
+    - text (French scenario)
+    - text_en (English translation)
+    - options (4 options with id a,b,c,d, and both text and text_en fields)
+    - correctOptionId
+    - context (legal citation in French)
+
+    Output as a JSON array of Questions.
+  `;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3-pro-preview",
+    contents: prompt,
+    config: {
+      systemInstruction: "You are a specialized civic exam generator. Output ONLY a valid JSON array.",
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            id: { type: Type.NUMBER },
+            category: { type: Type.STRING },
+            text: { type: Type.STRING },
+            text_en: { type: Type.STRING },
+            options: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  id: { type: Type.STRING },
+                  text: { type: Type.STRING },
+                  text_en: { type: Type.STRING }
+                },
+                required: ["id", "text"]
+              }
+            },
+            correctOptionId: { type: Type.STRING },
+            context: { type: Type.STRING }
+          },
+          required: ["id", "category", "text", "options", "correctOptionId"]
+        }
+      }
+    }
+  });
+
+  return JSON.parse(response.text.trim());
+};
+
+// Analyze a specific question attempt using gemini-3-pro-preview
 export const analyzeQuestion = async (
   question: Question,
   selectedOptionId: string
@@ -24,65 +181,49 @@ export const analyzeQuestion = async (
   const correctOption = question.options.find(o => o.id === question.correctOptionId);
 
   const prompt = `
-    Analyze this civic exam question and the learner's response:
-    Question: ${question.text}
-    Options: ${JSON.stringify(question.options)}
-    Learner Selected: ${selectedOption?.text} (ID: ${selectedOptionId})
-    Correct Answer: ${correctOption?.text} (ID: ${question.correctOptionId})
+    AUDIT REQUEST:
+    Scenario: ${question.text}
+    User Choice: ${selectedOption?.text}
+    Correct Answer: ${correctOption?.text}
     
-    Provide a JSON object with:
-    1. explanation: Professional institutional reasoning in English.
-    2. simplifiedExplanation: The same reasoning in very simple "Plain English" (B1 level).
-    3. vocabulary: A list of 2-3 difficult terms from the question with simple definitions in English.
-    4. conceptualTrap: The specific distractor logic used.
-    5. testedPrinciple: The core legal or civic principle.
-    6. misleadingLanguage: Specific linguistic traps.
-    7. patternAnalysis: Common misunderstanding patterns for this category.
+    Output JSON with: explanation, simplifiedExplanation, vocabulary(array), conceptualTrap, testedPrinciple, misleadingLanguage.
   `;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: prompt,
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION_BASE,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            explanation: { type: Type.STRING },
-            simplifiedExplanation: { type: Type.STRING },
-            vocabulary: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  term: { type: Type.STRING },
-                  simpleDefinition: { type: Type.STRING }
-                },
-                required: ["term", "simpleDefinition"]
-              }
-            },
-            conceptualTrap: { type: Type.STRING },
-            testedPrinciple: { type: Type.STRING },
-            learnerPerspective: { type: Type.STRING },
-            misleadingLanguage: { type: Type.STRING },
-            patternAnalysis: { type: Type.STRING }
+  const response = await ai.models.generateContent({
+    model: "gemini-3-pro-preview",
+    contents: prompt,
+    config: {
+      systemInstruction: SYSTEM_INSTRUCTION_BASE,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          explanation: { type: Type.STRING },
+          simplifiedExplanation: { type: Type.STRING },
+          vocabulary: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                term: { type: Type.STRING },
+                simpleDefinition: { type: Type.STRING }
+              },
+              required: ["term", "simpleDefinition"]
+            }
           },
-          required: ["explanation", "simplifiedExplanation", "vocabulary", "conceptualTrap", "testedPrinciple"]
-        }
+          conceptualTrap: { type: Type.STRING },
+          testedPrinciple: { type: Type.STRING },
+          misleadingLanguage: { type: Type.STRING }
+        },
+        required: ["explanation", "conceptualTrap", "testedPrinciple"]
       }
-    });
+    }
+  });
 
-    const text = response.text;
-    if (!text) throw new Error("Empty response from AI engine.");
-    return JSON.parse(text.trim());
-  } catch (error) {
-    console.error("Gemini analyzeQuestion error:", error);
-    throw error;
-  }
+  return JSON.parse(response.text.trim());
 };
 
+// Perform session-wide audit using gemini-3-pro-preview
 export const analyzeSession = async (
   questions: Question[],
   attempts: UserAttempt[]
@@ -91,94 +232,82 @@ export const analyzeSession = async (
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const isPerfect = attempts.every(a => a.isCorrect);
   
-  const historyData = attempts.map(a => {
+  const auditContext = attempts.map(a => {
     const q = questions.find(qu => qu.id === a.questionId);
-    return {
-      questionId: a.questionId,
-      category: q?.category,
-      text: q?.text,
-      isCorrect: a.isCorrect,
-      userChoice: q?.options.find(o => o.id === a.selectedOptionId)?.text,
-      correctChoice: q?.options.find(o => o.id === q.correctOptionId)?.text
+    const selected = q?.options.find(o => o.id === a.selectedOptionId);
+    return { 
+      question: q?.text, 
+      category: q?.category, 
+      userChoice: selected?.text, 
+      wasCorrect: a.isCorrect 
     };
   });
 
-  if (isPerfect) {
-    const masteryPrompt = `
-      The learner has answered all previous questions correctly.
-      Your role is NOT to praise, but to validate reasoning depth and check for hidden misconceptions.
-      
-      Session History: ${JSON.stringify(historyData)}
-
-      Tasks:
-      1. Reasoning validation: Explain what correct answers suggest about their institutional logic.
-      2. Trap awareness: Identify common traps they avoided.
-      3. Subtle boundary check: Introduce ONE subtle scenario testing the same concepts.
-      4. Pedagogical framing: Explain why this check matters beyond a "full score".
-
-      Output format (JSON only):
-      {
-        "overall_validation": "string",
-        "avoided_traps": ["string", "string"],
-        "why_full_score_is_not_the_end": "string",
-        "advanced_check": {
-          "scenario": "string",
-          "question": "string",
-          "options": [{ "id": "A", "text": "string" }, { "id": "B", "text": "string" }, { "id": "C", "text": "string" }],
-          "correct": "string",
-          "explanation": "string"
-        }
-      }
-    `;
-
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: masteryPrompt,
-        config: {
-          systemInstruction: "You are an AI reasoning assistant. Focus on institutional depth and nuance validation. Output valid JSON.",
-          responseMimeType: "application/json"
-        }
-      });
-      return { isPerfect: true, mastery: JSON.parse(response.text.trim()) };
-    } catch (e) {
-      console.error("Mastery analysis error", e);
-      throw e;
-    }
-  }
-
   const prompt = `
-    Conduct a "Civic Logic Audit" for this learner:
-    Session History: ${JSON.stringify(historyData)}
-    
-    Required JSON Schema:
-    {
-      "overallAssessment": "String summary of logic patterns",
-      "weakAreas": [
-        { "area": "Category", "evidenceQuestionIds": [1], "description": "Specific gap" }
-      ],
-      "errorPatterns": "Description of errors",
-      "recommendedFocus": "Actionable advice",
-      "nextPractice": {
-        "id": 999, "category": "Topic", "text": "Question", "options": [{"id": "a", "text": "Choice"}], "correctOptionId": "a"
-      }
-    }
+    PERFORM INSTITUTIONAL LOGIC AUDIT.
+    Session History: ${JSON.stringify(auditContext)}
+    The user is ${isPerfect ? 'PERFECT' : 'DEVELOPING'}. 
+    Based on this, generate a comprehensive session analysis.
   `;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: prompt,
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION_BASE,
-        responseMimeType: "application/json",
+  const response = await ai.models.generateContent({
+    model: "gemini-3-pro-preview",
+    contents: prompt,
+    config: {
+      systemInstruction: SYSTEM_INSTRUCTION_BASE,
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          overallAssessment: { type: Type.STRING, description: "Executive summary of reasoning quality." },
+          weakAreas: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                area: { type: Type.STRING },
+                description: { type: Type.STRING }
+              },
+              required: ["area", "description"]
+            }
+          },
+          errorPatterns: { type: Type.STRING, description: "Identification of repeated logic errors." },
+          recommendedFocus: { type: Type.STRING, description: "Actionable fix for the user." },
+          mastery: {
+            type: Type.OBJECT,
+            properties: {
+              overall_validation: { type: Type.STRING },
+              avoided_traps: { type: Type.ARRAY, items: { type: Type.STRING } },
+              why_full_score_is_not_the_end: { type: Type.STRING },
+              advanced_check: {
+                type: Type.OBJECT,
+                properties: {
+                  scenario: { type: Type.STRING },
+                  question: { type: Type.STRING },
+                  options: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        id: { type: Type.STRING },
+                        text: { type: Type.STRING }
+                      },
+                      required: ["id", "text"]
+                    }
+                  },
+                  correct: { type: Type.STRING },
+                  explanation: { type: Type.STRING }
+                },
+                required: ["scenario", "question", "options", "correct", "explanation"]
+              }
+            }
+          }
+        },
+        required: ["overallAssessment"]
       }
-    });
+    }
+  });
 
-    const data = JSON.parse(response.text.trim());
-    return { ...data, isPerfect: false };
-  } catch (error) {
-    console.error("Gemini analyzeSession error:", error);
-    throw error;
-  }
+  const result = JSON.parse(response.text.trim());
+  return { ...result, isPerfect };
 };
