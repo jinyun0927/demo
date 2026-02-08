@@ -87,14 +87,85 @@ export const analyzeQuestion = async (
 ): Promise<{ reasoning: AIReasoning; sources?: any[]; isMock?: boolean }> => {
   if (useMockMode) {
     await sleep(1500);
+    
+    // High-fidelity mock for Question 1 (Laïcité)
+    if (question.id === 1) {
+      return {
+        isMock: true,
+        reasoning: {
+          testedPrinciple: "The principle of Laïcité (secularism) and the distinction between the neutrality of the 'service' (the institution and its agents) and the freedom of the 'user' (the citizen receiving the service).",
+          explanation: "Parents are considered users ('usagers') of the public education service, not agents or students. Under French law and clarified by the Conseil d'État, users of public services enjoy freedom of conscience and are not subject to the duty of neutrality. Therefore, a parent attending a school meeting is permitted to wear a visible religious sign, provided their behavior does not constitute an act of proselytism or disrupt the public order/functioning of the school.",
+          thinkingSteps: [
+            "Identify the legal status of the individual: The parent is an 'usager' of the public service.",
+            "Determine the scope of the 2004 Law: Confirm that the prohibition of conspicuous religious signs applies exclusively to students in public primary and secondary schools.",
+            "Apply the duty of neutrality: Note that this duty applies to public officials (agents publics) to ensure the impartiality of the state.",
+            "Assess the jurisprudence: Reference the Conseil d'État's position that parents, even when participating in school activities or meetings, are not inherently bound by the religious neutrality requirement.",
+            "Verify exceptions: Check if the behavior involves proselytism or disruption, which would be the only legal grounds for intervention."
+          ],
+          conceptualTrap: "The most common trap is conflating the neutrality requirements of public service agents (staff) and students with those of parents. Many mistakenly believe the 2004 ban on conspicuous religious signs applies to everyone within the school walls, whereas it is strictly delimited by status."
+        },
+        sources: [
+          { web: { title: "Loi du 15 mars 2004 sur la laïcité", uri: "https://www.legifrance.gouv.fr/loda/id/JORFTEXT000000417977/" } },
+          { web: { title: "Avis du Conseil d'État n° 374508 (Accompagnateurs scolaires)", uri: "https://www.conseil-etat.fr/ressources/decisions-contentieuses/derniere-actualites-jurisprudentielles/etude-sur-la-laicite" } }
+        ]
+      };
+    }
+
+    // High-fidelity mock for Question 2 (Liberté d'expression)
+    if (question.id === 2) {
+      return {
+        isMock: true,
+        reasoning: {
+          testedPrinciple: "Freedom of Expression and the Right to Protest (Liberté d'expression et droit de manifestation).",
+          explanation: "Under French law and the Declaration of the Rights of Man and of the Citizen, freedom of expression is a fundamental principle. Criticism of the government, even when expressed with vehemence, is protected as long as it does not constitute a specific crime such as incitement to hatred, discrimination, or violence. Since the scenario specifies no such calls were made, police intervention would be an unlawful infringement on civil liberties.",
+          thinkingSteps: [
+            "Assess the legality of the assembly (authorized).",
+            "Evaluate the content of the speech against the thresholds of 'incitement to hatred' or 'violence'.",
+            "Reference Article 10 of the 1789 Declaration of the Rights of Man regarding the free communication of thoughts and opinions.",
+            "Distinguish between 'violent language' (protected political dissent) and 'incitement to violence' (prohibited criminal act).",
+            "Determine that the police's role is to ensure safety and public order, not to censor political dissent."
+          ],
+          conceptualTrap: "Confusing the intensity of political rhetoric with illegal incitement or a breach of public order."
+        },
+        sources: [
+          { web: { title: "Déclaration des Droits de l'Homme et du Citoyen de 1789 - Art. 11", uri: "https://www.conseil-constitutionnel.fr/le-bloc-de-constitutionnalite/declaration-des-droits-de-l-homme-et-du-citoyen-de-1789" } },
+          { web: { title: "Code de la sécurité intérieure - Droit de manifestation", uri: "https://www.legifrance.gouv.fr/codes/section_lc/LEGITEXT000025503206/LEGISCTA000025505105/" } }
+        ]
+      };
+    }
+
+    // High-fidelity mock for Question 3 (Droits et Société - PMA)
+    if (question.id === 3) {
+      return {
+        isMock: true,
+        reasoning: {
+          testedPrinciple: "The principle of equality of access to healthcare and the evolution of family law under the Law n° 2021-1017 of August 2, 2021.",
+          explanation: "Since the Bioethics Law of August 2, 2021, PMA is officially open to single women and female couples in France. Previously, it was reserved for heterosexual couples with a medical diagnosis of infertility. Now, any woman under the age of 45 can access these procedures (IVF, artificial insemination) with the costs covered by the French Social Security.",
+          thinkingSteps: [
+            "Identify the relevant legislation: Loi de bioéthique (August 2021).",
+            "Distinguish between PMA (authorized for all women) and GPA (surrogacy - prohibited).",
+            "Verify the age limit criteria (up to 43 or 45 depending on the specific procedure).",
+            "Recognize the shift from a 'medical' justification (infertility) to a 'societal' right for single women."
+          ],
+          conceptualTrap: "The primary trap is confusing the current legality of PMA (Assisted Reproductive Technology) for single women with the status of GPA (Surrogacy), which remains strictly prohibited in France, or assuming that a medical diagnosis of infertility is still required."
+        },
+        sources: [
+          { web: { title: "Loi n° 2021-1017 du 2 août 2021 relative à la bioéthique", uri: "https://www.legifrance.gouv.fr/jorf/id/JORFTEXT000043884384" } },
+          { web: { title: "Service-Public.fr: Assistance médicale à la procréation (PMA)", uri: "https://www.service-public.fr/particuliers/vosdroits/F31462" } }
+        ]
+      };
+    }
+
+    // Default mock for other questions
     return {
       isMock: true,
       reasoning: {
         explanation: "Institutional logic requires distinguishing between service users (citizens) and service providers (agents).",
-        thinkingSteps: ["Identify Actor", "Apply 1905 Neutrality Law"],
-        conceptualTrap: "Confusion between student rules and agent duties.",
-        testedPrinciple: "Public Service Neutrality"
-      }
+        thinkingSteps: ["Identify Actor", "Apply Institutional Framework"],
+        conceptualTrap: "Standard scenario logic applied.",
+        testedPrinciple: "General Public Interest"
+      },
+      sources: [{ web: { title: "Code des relations entre le public et l'administration", uri: "https://www.legifrance.gouv.fr/codes/texte_lc/LEGITEXT000031366350/" } }]
     };
   }
 
@@ -115,7 +186,8 @@ export const analyzeQuestion = async (
             conceptualTrap: { type: Type.STRING },
             testedPrinciple: { type: Type.STRING }
           }
-        }
+        },
+        tools: [{ googleSearch: {} }] // Enable grounding in live mode
       }
     });
     return { reasoning: JSON.parse(response.text), sources: response.candidates?.[0]?.groundingMetadata?.groundingChunks };
